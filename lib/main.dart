@@ -6,14 +6,20 @@ import 'dart:async';
 import 'package:intl/intl.dart';
 import 'dart:math';
 import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 // Define an enum for terrain modes
 enum TerrainMode { City, Highway, Other }
 
-const cityCutoffSpeded = 40.0;
+const cityCutoffSpeed = 40.0;
 const highwayCutoffSpeed = 60.0;
 const logBufferLength = 50;
 const logBufferDuration = 60;
+const turningAngleCutoff = 45;
+const cityDistanceInterval = 10;
+const cityTimeInterval = 3;
+const highwayDistanceInterval = 50;
+const highwayTimeInterval = 10;
 
 class GeoPoint {
   final double latitude;
@@ -104,7 +110,7 @@ bool isTurnDetected(double previousHeading, double currentHeading) {
   if (change > 180) {
     change = 360 - change;
   }
-  return change >= 45;
+  return change >= turningAngleCutoff;
 }
 
 double calculateDistanceInMeters(GeoPoint point1, GeoPoint point2) {
@@ -160,8 +166,11 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
   double _heading = 0.0;
   LoggerData? _lastLoggedData;
   TerrainMode _terrainMode = TerrainMode.City;
+  String? _currentLogFile;
+  final List<File> _pastTrips = [];
   final List<LoggerData> _bufferLog = [];
-  String get terrainModeString {
+  late Timer _timer;
+  String get _terrainModeString {
     switch (_terrainMode) {
       case TerrainMode.City:
         return 'City';
@@ -171,15 +180,16 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
         return 'Other';
     }
   }
+
   String get _timeString {
     return DateFormat('yyyy-MM-dd HH:mm:ss').format(_timeStamp).toString();
   }
-  late Timer _timer;
 
   @override
   void initState() {
     super.initState();
     _timer = Timer.periodic(Duration(seconds: 1), (Timer t) => _loop());
+    loadPastTrips();
   }
 
   @override
@@ -189,10 +199,31 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
     super.dispose();
   }
 
-  void toggleLogging() {
+  void loadPastTrips() async {
+    setState(() {
+      _pastTrips.clear();
+    });
+    final directory = await getApplicationDocumentsDirectory();
+    final files = directory.listSync();
+    for (var file in files) {
+      if (file is File && file.path.endsWith('.txt')) {
+        setState(() {
+          _pastTrips.add(file);
+        });
+      }
+    }
+  }
+
+  void toggleLogging() async {
     setState(() {
       isLogging = !isLogging;
     });
+    if (isLogging) {
+      _startNewTrip();
+    } else {
+      loadPastTrips();
+      await _flushBufferToFile();
+    }
   }
 
   void updateTerrainMode(TerrainMode mode) {
@@ -230,30 +261,44 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
     }
   }
 
+  void _startNewTrip() async {
+    final directory = await getApplicationDocumentsDirectory();
+    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+    _currentLogFile = '${directory.path}/$timestamp.txt';
+  }
+
   void logData() {
+    if (_currentLogFile == null) return;
     final loggerData = LoggerData(
       latitude: _latitude,
       longitude: _longitude,
       speed: _speed,
       altitude: _altitude,
       heading: _heading,
-      terrainMode: terrainModeString,
+      terrainMode: _terrainModeString,
       timestamp: _timeStamp,
     );
     setState(() {
       _lastLoggedData = loggerData;
       _bufferLog.add(loggerData);
     });
-    if(_bufferLog.isNotEmpty && (_bufferLog.length > logBufferLength || _bufferLog.first.timestamp.difference(DateTime.now()).inSeconds > logBufferDuration)) {
+    if (_bufferLog.isNotEmpty &&
+        (_bufferLog.length > logBufferLength ||
+            _bufferLog.first.timestamp.difference(DateTime.now()).inSeconds >
+                logBufferDuration)) {
       _flushBufferToFile();
     }
   }
 
   Future<void> _flushBufferToFile() async {
-    if (_bufferLog.isEmpty) return;
-    final directory = await getApplicationDocumentsDirectory();
-    final file = File('${directory.path}/gpx_log.txt');
-    await file.writeAsString('${_bufferLog.join('\n')}\n', mode: FileMode.append);
+    if (_bufferLog.isEmpty || _currentLogFile == null) return;
+    final file = File(_currentLogFile!);
+    var sink = file.openWrite(mode: FileMode.append);
+    for (var log in _bufferLog) {
+      sink.writeln(log.toString());
+    }
+    await sink.flush();
+    await sink.close();
     setState(() {
       _bufferLog.clear();
     });
@@ -278,7 +323,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
           final speedInKmh = 3.6 * _speed;
           if (speedInKmh >= highwayCutoffSpeed) {
             updateTerrainMode(TerrainMode.Highway);
-          } else if (speedInKmh <= cityCutoffSpeded) {
+          } else if (speedInKmh <= cityCutoffSpeed) {
             updateTerrainMode(TerrainMode.City);
           } else {
             // Let it be same as previous value
@@ -302,22 +347,23 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
             GeoPoint(lastLoggedData.latitude, lastLoggedData.longitude),
             GeoPoint(locationData.latitude, locationData.longitude),
           );
-          final interval = currentTime.difference(lastLoggedData.timestamp).inMilliseconds;
+          final timeInterval =
+              currentTime.difference(lastLoggedData.timestamp).inMilliseconds;
           if (_terrainMode == TerrainMode.City) {
-            if (distance >= 10) {
+            if (distance >= cityDistanceInterval) {
               logData();
               return;
             }
-            if (interval >= 3000) {
+            if (timeInterval >= cityTimeInterval * 1000) {
               logData();
               return;
             }
           } else if (_terrainMode == TerrainMode.Highway) {
-            if (distance >= 50) {
+            if (distance >= highwayDistanceInterval) {
               logData();
               return;
             }
-            if (interval >= 10000) {
+            if (timeInterval >= highwayTimeInterval) {
               logData();
               return;
             }
@@ -346,12 +392,52 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
             Text('Altitude: $_altitude', style: TextStyle(fontSize: 18)),
             Text('Heading: $_heading', style: TextStyle(fontSize: 18)),
             Text(
-              'Terrain Mode: $terrainModeString',
+              'Terrain Mode: $_terrainModeString',
               style: TextStyle(fontSize: 18),
             ),
             ElevatedButton(
               onPressed: toggleLogging,
               child: Text(isLogging ? 'Stop Logging' : 'Start Logging'),
+            ),
+            SizedBox(height: 20),
+            Text('Past Trips:', style: TextStyle(fontSize: 20)),
+            Expanded(
+              child: ListView.builder(
+                itemCount: _pastTrips.length,
+                itemBuilder: (context, index) {
+                  final file = _pastTrips[index];
+                  final name = file.path.split('/').last;
+                  return ListTile(
+                    title: Text(name),
+                    trailing: PopupMenuButton(
+                      itemBuilder:
+                          (context) => [
+                            PopupMenuItem(
+                              onTap: () => {
+                                // TODO: Ask for confirmation
+                                file.delete(),
+                                loadPastTrips(),
+                              },
+                              child: Text('Delete'),
+                            ),
+                            PopupMenuItem(
+                              onTap: () => {
+                                // TODO: Implement rename
+                              },
+                              child: Text('Rename'),
+                            ),
+                            PopupMenuItem(
+                              onTap: () => {
+                                // Open share dialog
+                                 Share.shareXFiles([XFile(file.path)], text: 'Sharing my text file')
+                              },
+                              child: Text('Export'),
+                            ),
+                          ],
+                    ),
+                  );
+                },
+              ),
             ),
           ],
         ),
