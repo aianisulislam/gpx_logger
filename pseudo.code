@@ -1,0 +1,45 @@
+# 📌 Ride Logger - Pseudo Code
+# Logs location data efficiently with smart logic for city & highway rides.
+
+START LOGGER:
+    INITIALIZE GPS, Gyroscope, Accelerometer, and other required sensors
+    SET mode = "CITY"  # Default mode (switches dynamically)
+
+    WHILE ride is active:
+        GET current timestamp
+        GET GPS coordinates (latitude, longitude)
+        GET current speed
+        GET current bearing (direction)
+        GET current elevation
+
+        # 🔄 Dynamic Mode Switching
+        IF speed > 60 km/h AND mode != "HIGHWAY":
+            SET mode = "HIGHWAY"
+        ELSE IF speed <= 40 km/h AND mode != "CITY":
+            SET mode = "CITY"
+
+        # 📍 CITY MODE: High Detail Logging
+        IF mode == "CITY":
+            IF TURN DETECTED (bearing change ≥ 45° OR gyroscope detects rotation):
+                LOG DATA
+            ELSE IF distance moved >= 10m OR time since last log >= 3s:
+                LOG DATA
+
+        # 🏍️ HIGHWAY MODE: Optimized Logging
+        ELSE IF mode == "HIGHWAY":
+            IF distance moved >= 50m OR time since last log >= 10s:
+                LOG DATA
+
+        # 🛠 Additional Data Enhancements
+        IF barometer available:
+            GET accurate elevation
+        IF accelerometer detects major lateral movement:
+            LOG "Significant movement event"
+
+        SLEEP for a short duration to optimize battery usage (e.g., 500ms - 1s)
+
+STOP LOGGER:
+    SAVE all logged data to GPX format
+    EXPORT file for manual sharing
+    CLOSE all sensors and free up resources
+
