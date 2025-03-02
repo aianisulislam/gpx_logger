@@ -4,9 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:async';
 import 'package:intl/intl.dart';
+import 'package:latlong2/latlong.dart';
 import 'dart:math';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:flutter_map/flutter_map.dart';
 
 // Define an enum for terrain modes
 enum TerrainMode { City, Highway, Other }
@@ -157,7 +159,7 @@ class GPXLoggerHome extends StatefulWidget {
 }
 
 class GPXLoggerHomeState extends State<GPXLoggerHome> {
-  bool isLogging = false;
+  bool _isLogging = false;
   DateTime _timeStamp = DateTime.now();
   double _latitude = 0.0;
   double _longitude = 0.0;
@@ -167,6 +169,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
   LoggerData? _lastLoggedData;
   TerrainMode _terrainMode = TerrainMode.City;
   String? _currentLogFile;
+  final MapController _mapController = MapController();
   final List<File> _pastTrips = [];
   final List<LoggerData> _bufferLog = [];
   late Timer _timer;
@@ -188,7 +191,10 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(Duration(seconds: 1), (Timer t) => _loop());
+    _timer = Timer.periodic(
+      Duration(seconds: 1),
+      (Timer t) => _loop(),
+    ); // Repeats the animation forward and backward.
     loadPastTrips();
   }
 
@@ -216,9 +222,9 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
 
   void toggleLogging() async {
     setState(() {
-      isLogging = !isLogging;
+      _isLogging = !_isLogging;
     });
-    if (isLogging) {
+    if (_isLogging) {
       _startNewTrip();
     } else {
       loadPastTrips();
@@ -268,7 +274,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
   }
 
   void logData() {
-    if (_currentLogFile == null) return;
+    if (_currentLogFile == null || !_isLogging) return;
     final loggerData = LoggerData(
       latitude: _latitude,
       longitude: _longitude,
@@ -309,26 +315,33 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
     setState(() {
       _timeStamp = currentTime;
     });
-    if (isLogging) {
-      try {
-        final locationData = await _getLocation();
-        if (locationData != null) {
-          setState(() {
-            _latitude = locationData.latitude;
-            _longitude = locationData.longitude;
-            _speed = locationData.speed;
-            _altitude = locationData.altitude;
-            _heading = locationData.heading;
-          });
-          final speedInKmh = 3.6 * _speed;
-          if (speedInKmh >= highwayCutoffSpeed) {
-            updateTerrainMode(TerrainMode.Highway);
-          } else if (speedInKmh <= cityCutoffSpeed) {
-            updateTerrainMode(TerrainMode.City);
-          } else {
-            // Let it be same as previous value
-          }
 
+    try {
+      final locationData = await _getLocation();
+      if (locationData != null) {
+        if (_latitude == 0 && _longitude == 0) {
+          _mapController.move(
+            LatLng(locationData.latitude, locationData.longitude),
+            18.0,
+          );
+        }
+        setState(() {
+          _latitude = locationData.latitude;
+          _longitude = locationData.longitude;
+          _speed = locationData.speed;
+          _altitude = locationData.altitude;
+          _heading = locationData.heading;
+        });
+
+        final speedInKmh = 3.6 * _speed;
+        if (speedInKmh >= highwayCutoffSpeed) {
+          updateTerrainMode(TerrainMode.Highway);
+        } else if (speedInKmh <= cityCutoffSpeed) {
+          updateTerrainMode(TerrainMode.City);
+        } else {
+          // Let it be same as previous value
+        }
+        if (_isLogging) {
           final lastLoggedData = _lastLoggedData;
           if (lastLoggedData == null) {
             logData();
@@ -369,78 +382,196 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
             }
           }
         }
-      } catch (e) {
-        toggleLogging();
       }
+    } catch (e) {
+      toggleLogging();
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: Text('GPX Logger')),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            Text('Current Time:', style: TextStyle(fontSize: 20)),
-            Text(_timeString, style: TextStyle(fontSize: 18)),
-            SizedBox(height: 20),
-            Text('Latitude: $_latitude', style: TextStyle(fontSize: 18)),
-            Text('Longitude: $_longitude', style: TextStyle(fontSize: 18)),
-            Text('Speed: $_speed', style: TextStyle(fontSize: 18)),
-            Text('Altitude: $_altitude', style: TextStyle(fontSize: 18)),
-            Text('Heading: $_heading', style: TextStyle(fontSize: 18)),
-            Text(
-              'Terrain Mode: $_terrainModeString',
-              style: TextStyle(fontSize: 18),
+      // appBar: AppBar(title: Text('GPX Logger')),
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: FlutterMap(
+              mapController: _mapController,
+              options: MapOptions(
+                initialCenter:
+                    _latitude != 0 && _longitude != 0
+                        ? LatLng(_latitude, _longitude)
+                        : LatLng(0.0, 0.0),
+                initialZoom: 18.0,
+                interactionOptions: InteractionOptions(
+                  flags:
+                      InteractiveFlag.pinchZoom |
+                      InteractiveFlag.doubleTapZoom |
+                      InteractiveFlag.doubleTapDragZoom |
+                      InteractiveFlag.scrollWheelZoom |
+                      InteractiveFlag.drag,
+                ),
+              ),
+              children: [
+                TileLayer(
+                  urlTemplate:
+                      // "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                      // "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
+                      "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+
+                  subdomains: ['a', 'b', 'c'],
+                ),
+                MarkerLayer(
+                  markers:
+                      _latitude != 0 && _longitude != 0
+                          ? [
+                            Marker(
+                              width: 24.0,
+                              height: 24.0,
+                              point: LatLng(_latitude, _longitude),
+                              child: Icon(
+                                _speed > 1
+                                    ? Icons.navigation
+                                    : Icons.radio_button_checked,
+                                size: 32.0,
+                                color: Colors.blueAccent[700],
+                              ),
+                            ),
+                          ]
+                          : [],
+                ),
+              ],
             ),
-            ElevatedButton(
-              onPressed: toggleLogging,
-              child: Text(isLogging ? 'Stop Logging' : 'Start Logging'),
-            ),
-            SizedBox(height: 20),
-            Text('Past Trips:', style: TextStyle(fontSize: 20)),
-            Expanded(
-              child: ListView.builder(
-                itemCount: _pastTrips.length,
-                itemBuilder: (context, index) {
-                  final file = _pastTrips[index];
-                  final name = file.path.split('/').last;
-                  return ListTile(
-                    title: Text(name),
-                    trailing: PopupMenuButton(
-                      itemBuilder:
-                          (context) => [
-                            PopupMenuItem(
-                              onTap: () => {
-                                // TODO: Ask for confirmation
-                                file.delete(),
-                                loadPastTrips(),
-                              },
-                              child: Text('Delete'),
-                            ),
-                            PopupMenuItem(
-                              onTap: () => {
-                                // TODO: Implement rename
-                              },
-                              child: Text('Rename'),
-                            ),
-                            PopupMenuItem(
-                              onTap: () => {
-                                // Open share dialog
-                                 Share.shareXFiles([XFile(file.path)], text: 'Sharing my text file')
-                              },
-                              child: Text('Export'),
-                            ),
-                          ],
+          ),
+          SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16.0, 0, 16.0, 72.0),
+              child: Stack(
+                children: [
+                  Positioned(
+                    right: 0,
+                    left: 0,
+                    bottom: 0,
+                    child: Center(
+                      child: ElevatedButton.icon(
+                        onPressed: toggleLogging,
+                        icon:
+                            _isLogging
+                                ? Icon(Icons.stop)
+                                : Icon(Icons.play_arrow),
+                        label: Text(_isLogging ? 'Stop' : 'Start'),
+                      ),
                     ),
-                  );
-                },
+                  ),
+                  Positioned(
+                    right: 0,
+                    bottom: 60,
+                    child: IconButton(
+                      onPressed:
+                          () => _mapController.move(
+                            LatLng(_latitude, _longitude),
+                            18.0,
+                          ),
+                      icon: Icon(
+                        Icons.my_location,
+                        size: 36.0,
+                        color: Colors.black,
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: 0,
+                    bottom: 120,
+                    child: IconButton(
+                      onPressed: () => logData(),
+                      icon: Icon(
+                        Icons.favorite_border,
+                        size: 36.0,
+                        color: Colors.black,
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    left: 0,
+                    top: 0,
+                    child: Padding(
+                      padding: const EdgeInsets.all(8.0),
+                      child: Text(
+                        _timeString,
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.black,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-          ],
-        ),
+          ),
+          DraggableScrollableSheet(
+            initialChildSize: 0.1, // Initial size (from bottom of the screen)
+            minChildSize: 0.1, // Minimum size (when fully collapsed)
+            maxChildSize: 0.6, // Maximum size (when fully expanded)
+            builder: (BuildContext context, ScrollController scrollController) {
+              return Container(
+                decoration: BoxDecoration(
+                  color: Colors.indigoAccent[100],
+                  borderRadius: BorderRadius.all(Radius.circular(16.0)),
+                ),
+                child: ListView.builder(
+                  padding: EdgeInsets.zero,
+                  controller: scrollController,
+                  itemCount: _pastTrips.length + 1,
+                  itemBuilder: (context, index) {
+                    if(index == 0) {
+                      return ListTile(
+                        title: Text('Past Trips'),
+                      );
+                    }
+                    final file = _pastTrips[index -1];
+                    final name = file.path.split('/').last;
+                    return ListTile(
+                      title: Text(name),
+                      trailing: PopupMenuButton(
+                        itemBuilder:
+                            (context) => [
+                              PopupMenuItem(
+                                onTap:
+                                    () => {
+                                      // TODO: Ask for confirmation
+                                      file.delete(),
+                                      loadPastTrips(),
+                                    },
+                                child: Text('Delete'),
+                              ),
+                              PopupMenuItem(
+                                onTap:
+                                    () => {
+                                      // TODO: Implement rename
+                                    },
+                                child: Text('Rename'),
+                              ),
+                              PopupMenuItem(
+                                onTap:
+                                    () => {
+                                      // Open share dialog
+                                      Share.shareXFiles([
+                                        XFile(file.path),
+                                      ], text: 'Sharing my text file'),
+                                    },
+                                child: Text('Export'),
+                              ),
+                            ],
+                      ),
+                    );
+                  },
+                ),
+              );
+            },
+          ),
+        ],
       ),
     );
   }
