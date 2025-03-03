@@ -49,5 +49,9 @@
 	<string>This app needs to access your location when open.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>This app needs to access your location when in the background.</string>
+	<key>UISupportsDocumentBrowser</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 </dict>
 </plist>

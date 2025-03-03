@@ -1,5 +1,4 @@
 import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:async';
@@ -9,9 +8,12 @@ import 'dart:math';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:adaptive_theme/adaptive_theme.dart';
+import 'package:xml/xml.dart' as xml;
 
-// Define an enum for terrain modes
 enum TerrainMode { City, Highway, Other }
+
+enum MapMode { Normal, Satellite, Hybrid }
 
 const cityCutoffSpeed = 40.0;
 const highwayCutoffSpeed = 60.0;
@@ -23,11 +25,11 @@ const cityTimeInterval = 3;
 const highwayDistanceInterval = 50;
 const highwayTimeInterval = 10;
 
-class GeoPoint {
-  final double latitude;
-  final double longitude;
+class FloatingActionButtonItem {
+  late final IconData icon;
+  late final VoidCallback onPressed;
 
-  const GeoPoint(this.latitude, this.longitude);
+  FloatingActionButtonItem({required this.icon, required this.onPressed});
 }
 
 class LoggerData {
@@ -106,6 +108,14 @@ class LoggerData {
       timestamp.hashCode;
 }
 
+class LogActionButtonItem {
+  final String name;
+  final IconData? icon;
+  final Function(File file) onPressed;
+
+  LogActionButtonItem({required this.name, this.icon, required this.onPressed});
+}
+
 bool isTurnDetected(double previousHeading, double currentHeading) {
   double change = (currentHeading - previousHeading).abs();
   // Handle wraparound cases (0 to 360 degrees)
@@ -115,7 +125,7 @@ bool isTurnDetected(double previousHeading, double currentHeading) {
   return change >= turningAngleCutoff;
 }
 
-double calculateDistanceInMeters(GeoPoint point1, GeoPoint point2) {
+double calculateDistanceInMeters(LatLng point1, LatLng point2) {
   const double earthRadiusMeters = 6371000.0; // Earth's radius in meters
 
   double toRadians(double degree) => degree * (pi / 180.0);
@@ -134,19 +144,234 @@ double calculateDistanceInMeters(GeoPoint point1, GeoPoint point2) {
   return earthRadiusMeters * c; // Distance in meters
 }
 
-void main() {
-  runApp(GPXLoggerApp());
+double getFractionalSizeInHeight(BuildContext context, double pixels) {
+  return pixels / MediaQuery.of(context).size.height;
+}
+
+Future<void> showConfirmationDialog({
+  required BuildContext context,
+  required String title,
+  required String content,
+  required VoidCallback onConfirm,
+  VoidCallback? onCancel,
+}) async {
+  return showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    builder: (context) {
+      return Padding(
+        padding: const EdgeInsets.all(32.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 10),
+            Text(content, textAlign: TextAlign.center),
+            SizedBox(height: 20),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                if (onCancel != null) onCancel();
+              },
+              child: Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                onConfirm();
+                Navigator.of(context).pop();
+                Navigator.of(context).pop();
+              },
+              style: ButtonStyle(
+                backgroundColor: WidgetStatePropertyAll(
+                  Theme.of(context).colorScheme.primary,
+                ),
+                foregroundColor: WidgetStatePropertyAll(
+                  Theme.of(context).colorScheme.onPrimary,
+                ),
+              ),
+              child: Text('Confirm'),
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+Future<void> showInputDialog({
+  required BuildContext context,
+  required String title,
+  required String label,
+  required Function(String) onConfirm,
+  String initialValue = '',
+  VoidCallback? onCancel,
+}) async {
+  TextEditingController controller = TextEditingController(text: initialValue);
+
+  return showModalBottomSheet(
+    context: context,
+    isScrollControlled: true,
+    builder: (context) {
+      return Padding(
+        padding: EdgeInsets.only(
+          top: 32,
+          left: 32,
+          right: 32,
+          bottom:
+              MediaQuery.of(context).viewInsets.bottom +
+              32, // Handle keyboard overlap
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              title,
+              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 10),
+            TextField(
+              controller: controller,
+              decoration: InputDecoration(labelText: label),
+              autofocus: true,
+            ),
+            SizedBox(height: 20),
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+                if (onCancel != null) onCancel();
+              },
+              child: Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                onConfirm(controller.text.trim());
+                Navigator.of(context).pop();
+                Navigator.of(context).pop();
+              },
+              style: ButtonStyle(
+                backgroundColor: WidgetStatePropertyAll(
+                  Theme.of(context).colorScheme.primary,
+                ),
+                foregroundColor: WidgetStatePropertyAll(
+                  Theme.of(context).colorScheme.onPrimary,
+                ),
+              ),
+              child: Text('OK'),
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+Future<File> convertToGpx(File txtFile) async {
+  final lines = await txtFile.readAsLines();
+  final builder = xml.XmlBuilder();
+
+  builder.processing('xml', 'version="1.0" encoding="UTF-8"');
+  builder.element(
+    'gpx',
+    nest: () {
+      builder.attribute('xmlns', 'http://www.topografix.com/GPX/1/1');
+      builder.attribute(
+        'xmlns:gpxtpx',
+        'http://www.garmin.com/xmlschemas/TrackPointExtension/v1',
+      );
+      builder.element(
+        'trk',
+        nest: () {
+          builder.element(
+            'name',
+            nest: txtFile.path.split('/').last.replaceAll('.txt', ''),
+          );
+          builder.element(
+            'trkseg',
+            nest: () {
+              for (var line in lines) {
+                final data = line.split(',');
+                if (data.length < 7) continue; // Skip invalid lines
+
+                builder.element(
+                  'trkpt',
+                  attributes: {'lat': data[0], 'lon': data[1]},
+                  nest: () {
+                    builder.element('ele', nest: data[2]);
+                    builder.element(
+                      'time',
+                      nest: DateTime.parse(data[6]).toUtc().toIso8601String(),
+                    );
+                    builder.element(
+                      'extensions',
+                      nest: () {
+                        builder.element(
+                          'gpxtpx:TrackPointExtension',
+                          nest: () {
+                            builder.element('gpxtpx:speed', nest: data[3]);
+                            builder.element('gpxtpx:course', nest: data[4]);
+                            builder.element(
+                              'gpxtpx:terrainMode',
+                              nest: data[5],
+                            );
+                          },
+                        );
+                      },
+                    );
+                  },
+                );
+              }
+            },
+          );
+        },
+      );
+    },
+  );
+
+  final directory = await getApplicationDocumentsDirectory();
+  final gpxFile = File(
+    '${directory.path}/${txtFile.path.split('/').last.replaceAll(".txt", ".gpx")}',
+  );
+  await gpxFile.writeAsString(
+    builder.buildDocument().toXmlString(pretty: true),
+  );
+
+  return gpxFile;
+}
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final savedThemeMode =
+      await AdaptiveTheme.getThemeMode(); // Load stored theme mode
+
+  runApp(GPXLoggerApp(savedThemeMode: savedThemeMode));
 }
 
 class GPXLoggerApp extends StatelessWidget {
-  const GPXLoggerApp({super.key});
+  final AdaptiveThemeMode? savedThemeMode;
+
+  const GPXLoggerApp({super.key, this.savedThemeMode});
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'GPX Logger',
-      theme: ThemeData.dark(),
-      home: GPXLoggerHome(),
+    return AdaptiveTheme(
+      light: ThemeData.light(useMaterial3: true),
+      dark: ThemeData.dark(useMaterial3: true),
+      initial:
+          savedThemeMode ??
+          AdaptiveThemeMode.system, // Use stored mode or system default
+      builder:
+          (theme, darkTheme) => MaterialApp(
+            title: 'GPX Logger',
+            theme: theme,
+            darkTheme: darkTheme,
+            home: GPXLoggerHome(),
+          ),
     );
   }
 }
@@ -168,6 +393,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
   double _heading = 0.0;
   LoggerData? _lastLoggedData;
   TerrainMode _terrainMode = TerrainMode.City;
+  final _mapMode = MapMode.Normal;
   String? _currentLogFile;
   final MapController _mapController = MapController();
   final List<File> _pastTrips = [];
@@ -184,8 +410,21 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
     }
   }
 
-  String get _timeString {
-    return DateFormat('yyyy-MM-dd HH:mm:ss').format(_timeStamp).toString();
+  String _mapURLTemplate(bool isDarkMode) {
+    switch (_mapMode) {
+      case MapMode.Normal:
+        return isDarkMode
+            ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+            : "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png";
+      case MapMode.Satellite:
+        return isDarkMode
+            ? "https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png"
+            : "https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png";
+      case MapMode.Hybrid:
+        return isDarkMode
+            ? "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
+            : "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}";
+    }
   }
 
   @override
@@ -301,7 +540,9 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
     final file = File(_currentLogFile!);
     var sink = file.openWrite(mode: FileMode.append);
     for (var log in _bufferLog) {
-      sink.writeln(log.toString());
+      sink.writeln(
+        '${log.latitude},${log.longitude},${log.altitude},${log.speed},${log.heading},${log.terrainMode},${log.timestamp.toIso8601String()}',
+      );
     }
     await sink.flush();
     await sink.close();
@@ -357,8 +598,8 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
             return;
           }
           final distance = calculateDistanceInMeters(
-            GeoPoint(lastLoggedData.latitude, lastLoggedData.longitude),
-            GeoPoint(locationData.latitude, locationData.longitude),
+            LatLng(lastLoggedData.latitude, lastLoggedData.longitude),
+            LatLng(locationData.latitude, locationData.longitude),
           );
           final timeInterval =
               currentTime.difference(lastLoggedData.timestamp).inMilliseconds;
@@ -388,10 +629,148 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
     }
   }
 
+  Widget buildBottomSheetTile(
+    LogActionButtonItem action,
+    File file,
+    BuildContext context,
+  ) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => action.onPressed(file),
+        splashColor: colorScheme.primary.withAlpha(72), // Custom ripple color
+        highlightColor: colorScheme.primary.withAlpha(25),
+        child: ListTile(
+          leading:
+              action.icon != null
+                  ? Icon(action.icon, color: Theme.of(context).iconTheme.color)
+                  : null,
+          title: Text(action.name),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final mode = AdaptiveTheme.of(context).mode;
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final isDarkMode = AdaptiveTheme.of(context).brightness == Brightness.dark;
+    final bottomSheetBoxDecoration = BoxDecoration(
+      color: Color.lerp(colorScheme.surface, colorScheme.onSurface, 0.025),
+      borderRadius: BorderRadius.all(Radius.circular(24.0)),
+      boxShadow:
+          isDarkMode
+              ? []
+              : [
+                BoxShadow(
+                  color: colorScheme.onSurface.withAlpha(40),
+                  blurRadius: 2.0,
+                  spreadRadius: 0.0,
+                ),
+              ],
+    );
+    final List<FloatingActionButtonItem> floatingButtonItems = [
+      FloatingActionButtonItem(
+        icon: Icons.my_location,
+        onPressed: () {
+          if (_latitude != 0 && _longitude != 0) {
+            _mapController.move(LatLng(_latitude, _longitude), 18.0);
+          }
+        },
+      ),
+      FloatingActionButtonItem(
+        icon: Icons.favorite_outline,
+        onPressed: () => logData(),
+      ),
+      FloatingActionButtonItem(
+        icon:
+            mode == AdaptiveThemeMode.system
+                ? Icons.brightness_6_outlined
+                : mode == AdaptiveThemeMode.light
+                ? Icons.light_mode_outlined
+                : Icons.dark_mode_outlined,
+        onPressed: () => AdaptiveTheme.of(context).toggleThemeMode(),
+      ),
+    ];
+    final List<LogActionButtonItem> logActionButtonItems = [
+      LogActionButtonItem(
+        name: 'Delete',
+        icon: Icons.delete,
+        onPressed:
+            (File file) => showConfirmationDialog(
+              context: context,
+              title: 'Delete Trip',
+              content: 'Are you sure you want to delete this trip?',
+              onConfirm: () async {
+                file.delete();
+                loadPastTrips();
+              },
+            ),
+      ),
+      LogActionButtonItem(
+        name: 'Rename',
+        icon: Icons.edit,
+        onPressed:
+            (File file) => showInputDialog(
+              context: context,
+              title: 'Rename Trip',
+              label: 'Enter new name',
+              initialValue: file.path.split('/').last.replaceAll('.txt', ''),
+              onConfirm: (String newName) async {
+                if (newName.isEmpty) return;
+                final directory = file.parent.path;
+                final newPath = '$directory/$newName.txt';
+                await file.rename(newPath);
+                loadPastTrips();
+              },
+            ),
+      ),
+      LogActionButtonItem(
+        name: 'Share',
+        icon: Icons.share,
+        onPressed: (File file) async {
+          showDialog(
+            context: context,
+            barrierDismissible: false, // Prevents user from dismissing it
+            builder: (context) {
+              return Dialog(
+                backgroundColor:
+                    Colors.transparent, // Removes dialog background
+                child: Container(
+                  padding: EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surface,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(),
+                      SizedBox(height: 16),
+                      Text(
+                        'Preparing file...',
+                        style: Theme.of(context).textTheme.bodyLarge,
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+          final gpxFile = await convertToGpx(file);
+          // ignore: use_build_context_synchronously
+          Navigator.of(context).pop();
+          await Share.shareXFiles([
+            XFile(gpxFile.path),
+          ], text: 'Sharing my trip log');
+        },
+      ),
+    ];
     return Scaffold(
-      // appBar: AppBar(title: Text('GPX Logger')),
       body: Stack(
         children: [
           Positioned.fill(
@@ -414,11 +793,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
               ),
               children: [
                 TileLayer(
-                  urlTemplate:
-                      // "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-                      // "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png",
-                      "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
-
+                  urlTemplate: _mapURLTemplate(isDarkMode),
                   subdomains: ['a', 'b', 'c'],
                 ),
                 MarkerLayer(
@@ -429,13 +804,21 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
                               width: 24.0,
                               height: 24.0,
                               point: LatLng(_latitude, _longitude),
-                              child: Icon(
-                                _speed > 1
-                                    ? Icons.navigation
-                                    : Icons.radio_button_checked,
-                                size: 32.0,
-                                color: Colors.blueAccent[700],
-                              ),
+                              child:
+                                  _speed > 1
+                                      ? Transform.rotate(
+                                        angle: _heading * pi / 180,
+                                        child: Icon(
+                                          Icons.navigation,
+                                          size: 32.0,
+                                          color: Colors.blueAccent[700],
+                                        ),
+                                      )
+                                      : Icon(
+                                        Icons.radio_button_checked,
+                                        size: 32.0,
+                                        color: Colors.blueAccent[700],
+                                      ),
                             ),
                           ]
                           : [],
@@ -455,55 +838,52 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
                     child: Center(
                       child: ElevatedButton.icon(
                         onPressed: toggleLogging,
+                        style: ElevatedButton.styleFrom(
+                          padding: EdgeInsets.symmetric(
+                            horizontal: 24.0,
+                            vertical: 12.0,
+                          ),
+                        ),
                         icon:
                             _isLogging
                                 ? Icon(Icons.stop)
                                 : Icon(Icons.play_arrow),
-                        label: Text(_isLogging ? 'Stop' : 'Start'),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    right: 0,
-                    bottom: 60,
-                    child: IconButton(
-                      onPressed:
-                          () => _mapController.move(
-                            LatLng(_latitude, _longitude),
-                            18.0,
+                        label: Text(
+                          _isLogging ? 'Stop' : 'Start',
+                          style: TextStyle(
+                            fontSize: 16.0,
+                            fontWeight: FontWeight.bold,
                           ),
-                      icon: Icon(
-                        Icons.my_location,
-                        size: 36.0,
-                        color: Colors.black,
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    right: 0,
-                    bottom: 120,
-                    child: IconButton(
-                      onPressed: () => logData(),
-                      icon: Icon(
-                        Icons.favorite_border,
-                        size: 36.0,
-                        color: Colors.black,
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    left: 0,
-                    top: 0,
-                    child: Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Text(
-                        _timeString,
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.black,
                         ),
                       ),
+                    ),
+                  ),
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: Column(
+                      children:
+                          floatingButtonItems.reversed
+                              .map(
+                                (item) => Padding(
+                                  padding: const EdgeInsets.only(top: 16.0),
+                                  child: ElevatedButton.icon(
+                                    onPressed: item.onPressed,
+                                    icon: Icon(item.icon, size: 24.0),
+                                    label: Text(''),
+                                    style: ElevatedButton.styleFrom(
+                                      padding: EdgeInsets.fromLTRB(
+                                        20,
+                                        12,
+                                        12,
+                                        12,
+                                      ),
+                                      shape: CircleBorder(),
+                                    ),
+                                  ),
+                                ),
+                              )
+                              .toList(),
                     ),
                   ),
                 ],
@@ -511,60 +891,92 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
             ),
           ),
           DraggableScrollableSheet(
-            initialChildSize: 0.1, // Initial size (from bottom of the screen)
-            minChildSize: 0.1, // Minimum size (when fully collapsed)
-            maxChildSize: 0.6, // Maximum size (when fully expanded)
+            initialChildSize: getFractionalSizeInHeight(context, 80),
+            minChildSize: getFractionalSizeInHeight(context, 80),
+            maxChildSize: getFractionalSizeInHeight(context, 600),
             builder: (BuildContext context, ScrollController scrollController) {
               return Container(
-                decoration: BoxDecoration(
-                  color: Colors.indigoAccent[100],
-                  borderRadius: BorderRadius.all(Radius.circular(16.0)),
-                ),
+                decoration: bottomSheetBoxDecoration,
                 child: ListView.builder(
-                  padding: EdgeInsets.zero,
+                  padding: EdgeInsets.all(4.0),
                   controller: scrollController,
                   itemCount: _pastTrips.length + 1,
                   itemBuilder: (context, index) {
-                    if(index == 0) {
+                    if (index == 0) {
                       return ListTile(
-                        title: Text('Past Trips'),
+                        title: Column(
+                          children: [
+                            Container(
+                              width: 40,
+                              height: 4,
+                              decoration: BoxDecoration(
+                                color: colorScheme.primary.withAlpha(220),
+                                borderRadius: BorderRadius.circular(50),
+                              ),
+                            ),
+                            Padding(
+                              padding: const EdgeInsets.all(8.0),
+                              child: Text(
+                                'Past Logs',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  letterSpacing: 0,
+                                  color: colorScheme.primary,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       );
                     }
-                    final file = _pastTrips[index -1];
-                    final name = file.path.split('/').last;
-                    return ListTile(
-                      title: Text(name),
-                      trailing: PopupMenuButton(
-                        itemBuilder:
-                            (context) => [
-                              PopupMenuItem(
-                                onTap:
-                                    () => {
-                                      // TODO: Ask for confirmation
-                                      file.delete(),
-                                      loadPastTrips(),
-                                    },
-                                child: Text('Delete'),
+                    final file = _pastTrips[index - 1];
+                    final name = file.path
+                        .split('/')
+                        .last
+                        .replaceAll('.txt', '');
+                    return buildBottomSheetTile(
+                      LogActionButtonItem(
+                        name: name,
+                        onPressed:
+                            (file) => {
+                              showModalBottomSheet(
+                                context: context,
+                                builder:
+                                    (context) => ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                        maxHeight:
+                                            200, // Set max height in pixels
+                                      ),
+                                      child: Container(
+                                        decoration: bottomSheetBoxDecoration,
+                                        child: ListView.builder(
+                                          padding: EdgeInsets.all(4.0),
+                                          itemCount:
+                                              logActionButtonItems.length,
+                                          itemBuilder: (context, index) {
+                                            final item =
+                                                logActionButtonItems[index];
+                                            return buildBottomSheetTile(
+                                              LogActionButtonItem(
+                                                name: item.name,
+                                                icon: item.icon,
+                                                onPressed:
+                                                    (file) =>
+                                                        item.onPressed(file),
+                                              ),
+                                              file,
+                                              context,
+                                            );
+                                          },
+                                        ),
+                                      ),
+                                    ),
                               ),
-                              PopupMenuItem(
-                                onTap:
-                                    () => {
-                                      // TODO: Implement rename
-                                    },
-                                child: Text('Rename'),
-                              ),
-                              PopupMenuItem(
-                                onTap:
-                                    () => {
-                                      // Open share dialog
-                                      Share.shareXFiles([
-                                        XFile(file.path),
-                                      ], text: 'Sharing my text file'),
-                                    },
-                                child: Text('Export'),
-                              ),
-                            ],
+                            },
                       ),
+                      file,
+                      context,
                     );
                   },
                 ),
