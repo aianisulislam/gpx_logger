@@ -113,7 +113,13 @@ class LogActionButtonItem {
 }
 
 bool isTurnDetected(double previousHeading, double currentHeading) {
-  return Geolocator.bearingBetween(0, previousHeading, 0, currentHeading).abs() >= turningAngleCutoff;
+  return Geolocator.bearingBetween(
+        0,
+        previousHeading,
+        0,
+        currentHeading,
+      ).abs() >=
+      turningAngleCutoff;
 }
 
 double calculateDistanceInMeters(LatLng point1, LatLng point2) {
@@ -421,10 +427,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(
-      Duration(seconds: 1),
-      (Timer t) => _loop(),
-    );
+    _timer = Timer.periodic(Duration(seconds: 1), (Timer t) => _loop());
     loadPastTrips();
   }
 
@@ -475,6 +478,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
 
     serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
+      await Geolocator.openLocationSettings();
       return null;
     }
 
@@ -818,7 +822,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
           ),
           SafeArea(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16.0, 0, 16.0, 72.0),
+              padding: const EdgeInsets.fromLTRB(16.0, 0, 16.0, 100.0),
               child: Stack(
                 children: [
                   Positioned(
