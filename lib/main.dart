@@ -51,7 +51,6 @@ class LoggerData {
     required this.timestamp,
   });
 
-  // Factory constructor to create from a Map
   factory LoggerData.fromMap(Map<String, dynamic> map) {
     return LoggerData(
       latitude: (map['latitude'] ?? 0) as double,
@@ -64,7 +63,6 @@ class LoggerData {
     );
   }
 
-  // Method to convert to a Map
   Map<String, dynamic> toMap() {
     return {
       'latitude': latitude,
@@ -77,13 +75,11 @@ class LoggerData {
     };
   }
 
-  // Override toString for easier debugging
   @override
   String toString() {
     return 'LoggerData{ latitude: $latitude, longitude: $longitude, speed: $speed, altitude: $altitude, heading: $heading, terrainMode: $terrainMode, timestamp: $timestamp }';
   }
 
-  //Override == and hashCode for equality checks.
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -117,12 +113,7 @@ class LogActionButtonItem {
 }
 
 bool isTurnDetected(double previousHeading, double currentHeading) {
-  double change = (currentHeading - previousHeading).abs();
-  // Handle wraparound cases (0 to 360 degrees)
-  if (change > 180) {
-    change = 360 - change;
-  }
-  return change >= turningAngleCutoff;
+  return Geolocator.bearingBetween(0, previousHeading, 0, currentHeading).abs() >= turningAngleCutoff;
 }
 
 double calculateDistanceInMeters(LatLng point1, LatLng point2) {
@@ -393,10 +384,10 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
   double _heading = 0.0;
   LoggerData? _lastLoggedData;
   TerrainMode _terrainMode = TerrainMode.City;
+  List<File> _pastTrips = [];
   final _mapMode = MapMode.Normal;
   String? _currentLogFile;
   final MapController _mapController = MapController();
-  final List<File> _pastTrips = [];
   final List<LoggerData> _bufferLog = [];
   late Timer _timer;
   String get _terrainModeString {
@@ -433,7 +424,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
     _timer = Timer.periodic(
       Duration(seconds: 1),
       (Timer t) => _loop(),
-    ); // Repeats the animation forward and backward.
+    );
     loadPastTrips();
   }
 
@@ -445,18 +436,19 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
   }
 
   void loadPastTrips() async {
-    setState(() {
-      _pastTrips.clear();
-    });
     final directory = await getApplicationDocumentsDirectory();
     final files = directory.listSync();
+    List<File> pastTrips = [];
+
     for (var file in files) {
       if (file is File && file.path.endsWith('.txt')) {
-        setState(() {
-          _pastTrips.add(file);
-        });
+        pastTrips.add(file);
       }
     }
+
+    setState(() {
+      _pastTrips = pastTrips;
+    });
   }
 
   void toggleLogging() async {
@@ -658,7 +650,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
     final mode = AdaptiveTheme.of(context).mode;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final isDarkMode = AdaptiveTheme.of(context).brightness == Brightness.dark;
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     final bottomSheetBoxDecoration = BoxDecoration(
       color: Color.lerp(colorScheme.surface, colorScheme.onSurface, 0.025),
       borderRadius: BorderRadius.all(Radius.circular(24.0)),
@@ -703,8 +695,8 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
         onPressed:
             (File file) => showConfirmationDialog(
               context: context,
-              title: 'Delete Trip',
-              content: 'Are you sure you want to delete this trip?',
+              title: 'Delete Log',
+              content: 'Are you sure you want to delete this log?',
               onConfirm: () async {
                 file.delete();
                 loadPastTrips();
@@ -717,7 +709,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
         onPressed:
             (File file) => showInputDialog(
               context: context,
-              title: 'Rename Trip',
+              title: 'Rename Log',
               label: 'Enter new name',
               initialValue: file.path.split('/').last.replaceAll('.txt', ''),
               onConfirm: (String newName) async {
@@ -764,9 +756,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
           final gpxFile = await convertToGpx(file);
           // ignore: use_build_context_synchronously
           Navigator.of(context).pop();
-          await Share.shareXFiles([
-            XFile(gpxFile.path),
-          ], text: 'Sharing my trip log');
+          await Share.shareXFiles([XFile(gpxFile.path)]);
         },
       ),
     ];
