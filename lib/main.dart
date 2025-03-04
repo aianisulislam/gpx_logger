@@ -923,9 +923,10 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
                                           padding: const EdgeInsets.all(12.0),
                                           child: Text(
                                             stat.label,
-                                            style: TextStyle(
+                                              style: TextStyle(
                                               fontSize: 16.0,
                                               color: colorScheme.primary,
+                                              fontWeight: FontWeight.bold,
                                             ),
                                           ),
                                         ),
