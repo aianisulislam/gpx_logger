@@ -11,9 +11,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:adaptive_theme/adaptive_theme.dart';
 import 'package:xml/xml.dart' as xml;
 
-enum TerrainMode { City, Highway, Other }
-
-enum MapMode { Normal, Satellite, Hybrid }
+enum TerrainMode { city, highway, other }
 
 const cityCutoffSpeed = 40.0;
 const highwayCutoffSpeed = 60.0;
@@ -57,58 +55,6 @@ class LoggerData {
     required this.terrainMode,
     required this.timestamp,
   });
-
-  factory LoggerData.fromMap(Map<String, dynamic> map) {
-    return LoggerData(
-      latitude: (map['latitude'] ?? 0) as double,
-      longitude: (map['longitude'] ?? 0) as double,
-      speed: (map['speed'] ?? 0) as double,
-      altitude: (map['altitude'] ?? 0) as double,
-      heading: (map['heading'] ?? 0) as double,
-      terrainMode: (map['terrainMode'] ?? 'City') as String,
-      timestamp: (map['timestamp'] ?? DateTime.now()) as DateTime,
-    );
-  }
-
-  Map<String, dynamic> toMap() {
-    return {
-      'latitude': latitude,
-      'longitude': longitude,
-      'speed': speed,
-      'altitude': altitude,
-      'heading': heading,
-      'terrainMode': terrainMode,
-      'timestamp': timestamp,
-    };
-  }
-
-  @override
-  String toString() {
-    return 'LoggerData{ latitude: $latitude, longitude: $longitude, speed: $speed, altitude: $altitude, heading: $heading, terrainMode: $terrainMode, timestamp: $timestamp }';
-  }
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is LoggerData &&
-          runtimeType == other.runtimeType &&
-          latitude == other.latitude &&
-          longitude == other.longitude &&
-          speed == other.speed &&
-          altitude == other.altitude &&
-          heading == other.heading &&
-          terrainMode == other.terrainMode &&
-          timestamp == other.timestamp;
-
-  @override
-  int get hashCode =>
-      latitude.hashCode ^
-      longitude.hashCode ^
-      speed.hashCode ^
-      altitude.hashCode ^
-      heading.hashCode ^
-      terrainMode.hashCode ^
-      timestamp.hashCode;
 }
 
 class LogActionButtonItem {
@@ -130,8 +76,7 @@ bool isTurnDetected(double previousHeading, double currentHeading) {
 }
 
 double calculateDistanceInMeters(LatLng point1, LatLng point2) {
-  const double earthRadiusMeters = 6371000.0; // Earth's radius in meters
-
+  const double earthRadiusMeters = 6371000.0;
   double toRadians(double degree) => degree * (pi / 180.0);
 
   double dLat = toRadians(point2.latitude - point1.latitude);
@@ -145,7 +90,7 @@ double calculateDistanceInMeters(LatLng point1, LatLng point2) {
 
   double c = 2 * atan2(sqrt(a), sqrt(1 - a));
 
-  return earthRadiusMeters * c; // Distance in meters
+  return earthRadiusMeters * c;
 }
 
 double getFractionalSizeInHeight(BuildContext context, double pixels) {
@@ -226,9 +171,7 @@ Future<void> showInputDialog({
           top: 32,
           left: 32,
           right: 32,
-          bottom:
-              MediaQuery.of(context).viewInsets.bottom +
-              32, // Handle keyboard overlap
+          bottom: MediaQuery.of(context).viewInsets.bottom + 32,
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -300,7 +243,7 @@ Future<File> convertToGpx(File txtFile) async {
             nest: () {
               for (var line in lines) {
                 final data = line.split(',');
-                if (data.length < 7) continue; // Skip invalid lines
+                if (data.length < 7) continue;
 
                 builder.element(
                   'trkpt',
@@ -350,8 +293,7 @@ Future<File> convertToGpx(File txtFile) async {
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  final savedThemeMode =
-      await AdaptiveTheme.getThemeMode(); // Load stored theme mode
+  final savedThemeMode = await AdaptiveTheme.getThemeMode();
 
   runApp(GPXLoggerApp(savedThemeMode: savedThemeMode));
 }
@@ -366,9 +308,7 @@ class GPXLoggerApp extends StatelessWidget {
     return AdaptiveTheme(
       light: ThemeData.light(useMaterial3: true),
       dark: ThemeData.dark(useMaterial3: true),
-      initial:
-          savedThemeMode ??
-          AdaptiveThemeMode.system, // Use stored mode or system default
+      initial: savedThemeMode ?? AdaptiveThemeMode.system,
       builder:
           (theme, darkTheme) => MaterialApp(
             title: 'GPX Logger',
@@ -397,11 +337,10 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
   double _altitude = 0.0;
   double _heading = 0.0;
   LoggerData? _lastLoggedData;
-  TerrainMode _terrainMode = TerrainMode.City;
+  TerrainMode _terrainMode = TerrainMode.city;
   List<File> _pastLogs = [];
   File _selectedLog = File('');
   String? _currentLogFile;
-  final _mapMode = MapMode.Normal;
   final MapController _mapController = MapController();
   final List<LoggerData> _bufferLog = [];
   late Timer _timer;
@@ -410,28 +349,12 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
 
   String get _terrainModeString {
     switch (_terrainMode) {
-      case TerrainMode.City:
+      case TerrainMode.city:
         return 'City';
-      case TerrainMode.Highway:
+      case TerrainMode.highway:
         return 'Highway';
-      case TerrainMode.Other:
+      case TerrainMode.other:
         return 'Other';
-    }
-  }
-  String _mapURLTemplate(bool isDarkMode) {
-    switch (_mapMode) {
-      case MapMode.Normal:
-        return isDarkMode
-            ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
-            : "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png";
-      case MapMode.Satellite:
-        return isDarkMode
-            ? "https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png"
-            : "https://tiles.stadiamaps.com/tiles/alidade_smooth/{z}/{x}/{y}{r}.png";
-      case MapMode.Hybrid:
-        return isDarkMode
-            ? "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}"
-            : "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}";
     }
   }
 
@@ -456,10 +379,15 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
       await Geolocator.openLocationSettings();
       isServiceEnabled = await Geolocator.isLocationServiceEnabled();
     }
-    LocationPermission locationPermissions = await Geolocator.checkPermission();
+
+    LocationPermission locationPermission = await Geolocator.checkPermission();
+    if (locationPermission == LocationPermission.denied) {
+      locationPermission = await Geolocator.requestPermission();
+    }
+
     setState(() {
       serviceEnabled = isServiceEnabled;
-      permission = locationPermissions;
+      permission = locationPermission;
     });
   }
 
@@ -514,7 +442,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
       terrainMode: _terrainModeString,
       timestamp: _timeStamp,
     );
-    if(_lastLoggedData?.timestamp == loggerData.timestamp){
+    if (_lastLoggedData?.timestamp == loggerData.timestamp) {
       return;
     }
     setState(() {
@@ -556,11 +484,9 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
 
         final speedInKmh = 3.6 * _speed;
         if (speedInKmh >= highwayCutoffSpeed) {
-          updateTerrainMode(TerrainMode.Highway);
+          updateTerrainMode(TerrainMode.highway);
         } else if (speedInKmh <= cityCutoffSpeed) {
-          updateTerrainMode(TerrainMode.City);
-        } else {
-          // Let it be same as previous value
+          updateTerrainMode(TerrainMode.city);
         }
         if (_isLogging) {
           final lastLoggedData = _lastLoggedData;
@@ -583,7 +509,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
           );
           final timeInterval =
               currentTime.difference(lastLoggedData.timestamp).inMilliseconds;
-          if (_terrainMode == TerrainMode.City) {
+          if (_terrainMode == TerrainMode.city) {
             if (distance >= cityDistanceInterval) {
               logData();
               return;
@@ -592,7 +518,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
               logData();
               return;
             }
-          } else if (_terrainMode == TerrainMode.Highway) {
+          } else if (_terrainMode == TerrainMode.highway) {
             if (distance >= highwayDistanceInterval) {
               logData();
               return;
@@ -654,7 +580,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
       color: Colors.transparent,
       child: InkWell(
         onTap: () => action.onPressed(file),
-        splashColor: colorScheme.primary.withAlpha(72), // Custom ripple color
+        splashColor: colorScheme.primary.withAlpha(72),
         highlightColor: colorScheme.primary.withAlpha(25),
         child: ListTile(
           leading:
@@ -688,9 +614,15 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
               ],
     );
     final List<Stats> currentStats = [
-      Stats(icon: Icons.speed,label:  '${(_speed * 3.6).toStringAsFixed(2)} kmph'),
-      Stats(icon: Icons.terrain_outlined,label:  '${_altitude.toStringAsFixed(2)} meters'),
-      Stats(icon: Icons.signpost_outlined,label:  _terrainModeString),
+      Stats(
+        icon: Icons.speed,
+        label: '${(_speed * 3.6).toStringAsFixed(2)} kmph',
+      ),
+      Stats(
+        icon: Icons.terrain_outlined,
+        label: '${_altitude.toStringAsFixed(2)} meters',
+      ),
+      Stats(icon: Icons.signpost_outlined, label: _terrainModeString),
     ];
     final List<FloatingActionButtonItem> floatingButtonItems = [
       FloatingActionButtonItem(
@@ -766,11 +698,10 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
         onPressed: (File file) async {
           showDialog(
             context: context,
-            barrierDismissible: false, // Prevents user from dismissing it
+            barrierDismissible: false,
             builder: (context) {
               return Dialog(
-                backgroundColor:
-                    Colors.transparent, // Removes dialog background
+                backgroundColor: Colors.transparent,
                 child: Container(
                   padding: EdgeInsets.all(24),
                   decoration: BoxDecoration(
@@ -822,7 +753,10 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
               ),
               children: [
                 TileLayer(
-                  urlTemplate: _mapURLTemplate(isDarkMode),
+                  urlTemplate:
+                      isDarkMode
+                          ? "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png"
+                          : "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
                   subdomains: ['a', 'b', 'c'],
                 ),
                 ...(_isViewing
@@ -974,29 +908,37 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
                             child: Column(
                               mainAxisSize: MainAxisSize.min,
                               crossAxisAlignment: CrossAxisAlignment.start,
-                              children: currentStats.map((stat) {
-                                  return Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    mainAxisAlignment: MainAxisAlignment.start,
-                                    children: [
-                                      Icon(
-                                        stat.icon,
-                                        color: colorScheme.primary,
-                                        size: 24.0,
-                                      ),
-                                      Padding(
-                                        padding: const EdgeInsets.all(12.0),
-                                        child: Text(
-                                          stat.label,
-                                          style: TextStyle(
-                                            fontSize: 16.0,
-                                            color: colorScheme.primary,
+                              children:
+                                  currentStats.map((stat) {
+                                    return Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.start,
+                                      children: [
+                                        Icon(
+                                          stat.icon,
+                                          color: colorScheme.primary,
+                                          size: 24.0,
+                                        ),
+                                        Padding(
+                                          padding: const EdgeInsets.all(12.0),
+                                          child: Text(
+                                            stat.label,
+                                            style: TextStyle(
+                                              fontSize: 16.0,
+                                              color: colorScheme.primary,
+                                              foreground:
+                                                  Paint()
+                                                    ..style =
+                                                        PaintingStyle.stroke
+                                                    ..strokeWidth = 4
+                                                    ..color = Colors.white,
+                                            ),
                                           ),
                                         ),
-                                      ),
-                                    ],
-                                  );
-                                }).toList(),
+                                      ],
+                                    );
+                                  }).toList(),
                             ),
                           ),
                           Positioned(
@@ -1120,8 +1062,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
                                     builder:
                                         (context) => ConstrainedBox(
                                           constraints: BoxConstraints(
-                                            maxHeight:
-                                                280, // Set max height in pixels
+                                            maxHeight: 280,
                                           ),
                                           child: Container(
                                             decoration:
