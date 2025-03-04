@@ -25,6 +25,13 @@ const cityTimeInterval = 3;
 const highwayDistanceInterval = 50;
 const highwayTimeInterval = 10;
 
+class Stats {
+  final IconData icon;
+  final String label;
+
+  Stats({required this.icon, required this.label});
+}
+
 class FloatingActionButtonItem {
   late final IconData icon;
   late final VoidCallback onPressed;
@@ -382,6 +389,7 @@ class GPXLoggerHome extends StatefulWidget {
 
 class GPXLoggerHomeState extends State<GPXLoggerHome> {
   bool _isLogging = false;
+  bool _isViewing = false;
   DateTime _timeStamp = DateTime.now();
   double _latitude = 0.0;
   double _longitude = 0.0;
@@ -390,12 +398,16 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
   double _heading = 0.0;
   LoggerData? _lastLoggedData;
   TerrainMode _terrainMode = TerrainMode.City;
-  List<File> _pastTrips = [];
-  final _mapMode = MapMode.Normal;
+  List<File> _pastLogs = [];
+  File _selectedLog = File('');
   String? _currentLogFile;
+  final _mapMode = MapMode.Normal;
   final MapController _mapController = MapController();
   final List<LoggerData> _bufferLog = [];
   late Timer _timer;
+  late bool serviceEnabled;
+  late LocationPermission permission;
+
   String get _terrainModeString {
     switch (_terrainMode) {
       case TerrainMode.City:
@@ -406,7 +418,6 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
         return 'Other';
     }
   }
-
   String _mapURLTemplate(bool isDarkMode) {
     switch (_mapMode) {
       case MapMode.Normal:
@@ -427,30 +438,44 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(Duration(seconds: 1), (Timer t) => _loop());
-    loadPastTrips();
+    loadPastLogs();
+    initializeLoggingAccess();
+    _timer = Timer.periodic(Duration(seconds: 1), (Timer t) => loop());
   }
 
   @override
   void dispose() {
-    _flushBufferToFile();
+    flushBufferToFile();
     _timer.cancel();
     super.dispose();
   }
 
-  void loadPastTrips() async {
+  void initializeLoggingAccess() async {
+    bool isServiceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!isServiceEnabled) {
+      await Geolocator.openLocationSettings();
+      isServiceEnabled = await Geolocator.isLocationServiceEnabled();
+    }
+    LocationPermission locationPermissions = await Geolocator.checkPermission();
+    setState(() {
+      serviceEnabled = isServiceEnabled;
+      permission = locationPermissions;
+    });
+  }
+
+  void loadPastLogs() async {
     final directory = await getApplicationDocumentsDirectory();
     final files = directory.listSync();
-    List<File> pastTrips = [];
+    List<File> pastLogs = [];
 
     for (var file in files) {
       if (file is File && file.path.endsWith('.txt')) {
-        pastTrips.add(file);
+        pastLogs.add(file);
       }
     }
 
     setState(() {
-      _pastTrips = pastTrips;
+      _pastLogs = pastLogs;
     });
   }
 
@@ -459,10 +484,10 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
       _isLogging = !_isLogging;
     });
     if (_isLogging) {
-      _startNewTrip();
+      startNewLog();
     } else {
-      loadPastTrips();
-      await _flushBufferToFile();
+      loadPastLogs();
+      await flushBufferToFile();
     }
   }
 
@@ -472,37 +497,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
     });
   }
 
-  Future<Position?> _getLocation() async {
-    bool serviceEnabled;
-    LocationPermission permission;
-
-    serviceEnabled = await Geolocator.isLocationServiceEnabled();
-    if (!serviceEnabled) {
-      await Geolocator.openLocationSettings();
-      return null;
-    }
-
-    permission = await Geolocator.checkPermission();
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) {
-        return null;
-      }
-    }
-
-    if (permission == LocationPermission.deniedForever) {
-      return null;
-    }
-
-    try {
-      Position position = await Geolocator.getCurrentPosition();
-      return position;
-    } catch (e) {
-      return null;
-    }
-  }
-
-  void _startNewTrip() async {
+  void startNewLog() async {
     final directory = await getApplicationDocumentsDirectory();
     final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
     _currentLogFile = '${directory.path}/$timestamp.txt';
@@ -519,6 +514,9 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
       terrainMode: _terrainModeString,
       timestamp: _timeStamp,
     );
+    if(_lastLoggedData?.timestamp == loggerData.timestamp){
+      return;
+    }
     setState(() {
       _lastLoggedData = loggerData;
       _bufferLog.add(loggerData);
@@ -527,33 +525,18 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
         (_bufferLog.length > logBufferLength ||
             _bufferLog.first.timestamp.difference(DateTime.now()).inSeconds >
                 logBufferDuration)) {
-      _flushBufferToFile();
+      flushBufferToFile();
     }
   }
 
-  Future<void> _flushBufferToFile() async {
-    if (_bufferLog.isEmpty || _currentLogFile == null) return;
-    final file = File(_currentLogFile!);
-    var sink = file.openWrite(mode: FileMode.append);
-    for (var log in _bufferLog) {
-      sink.writeln(
-        '${log.latitude},${log.longitude},${log.altitude},${log.speed},${log.heading},${log.terrainMode},${log.timestamp.toIso8601String()}',
-      );
+  void loop() async {
+    if (!serviceEnabled ||
+        permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      return;
     }
-    await sink.flush();
-    await sink.close();
-    setState(() {
-      _bufferLog.clear();
-    });
-  }
-
-  void _loop() async {
-    final currentTime = DateTime.now();
-    setState(() {
-      _timeStamp = currentTime;
-    });
-
     try {
+      final currentTime = DateTime.now();
       final locationData = await _getLocation();
       if (locationData != null) {
         if (_latitude == 0 && _longitude == 0) {
@@ -568,6 +551,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
           _speed = locationData.speed;
           _altitude = locationData.altitude;
           _heading = locationData.heading;
+          _timeStamp = currentTime;
         });
 
         final speedInKmh = 3.6 * _speed;
@@ -625,6 +609,40 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
     }
   }
 
+  Future<Position?> _getLocation() async {
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        return null;
+      }
+    }
+    if (permission == LocationPermission.deniedForever) {
+      return null;
+    }
+    try {
+      Position position = await Geolocator.getCurrentPosition();
+      return position;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  Future<void> flushBufferToFile() async {
+    if (_bufferLog.isEmpty || _currentLogFile == null) return;
+    final file = File(_currentLogFile!);
+    var sink = file.openWrite(mode: FileMode.append);
+    for (var log in _bufferLog) {
+      sink.writeln(
+        '${log.latitude},${log.longitude},${log.altitude},${log.speed},${log.heading},${log.terrainMode},${log.timestamp.toIso8601String()}',
+      );
+    }
+    await sink.flush();
+    await sink.close();
+    setState(() {
+      _bufferLog.clear();
+    });
+  }
+
   Widget buildBottomSheetTile(
     LogActionButtonItem action,
     File file,
@@ -669,6 +687,11 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
                 ),
               ],
     );
+    final List<Stats> currentStats = [
+      Stats(icon: Icons.speed,label:  '${(_speed * 3.6).toStringAsFixed(2)} kmph'),
+      Stats(icon: Icons.terrain_outlined,label:  '${_altitude.toStringAsFixed(2)} meters'),
+      Stats(icon: Icons.signpost_outlined,label:  _terrainModeString),
+    ];
     final List<FloatingActionButtonItem> floatingButtonItems = [
       FloatingActionButtonItem(
         icon: Icons.my_location,
@@ -694,6 +717,18 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
     ];
     final List<LogActionButtonItem> logActionButtonItems = [
       LogActionButtonItem(
+        name: 'View',
+        icon: Icons.remove_red_eye,
+        onPressed:
+            (File file) => {
+              Navigator.of(context).pop(),
+              setState(() {
+                _selectedLog = file;
+                _isViewing = true;
+              }),
+            },
+      ),
+      LogActionButtonItem(
         name: 'Delete',
         icon: Icons.delete,
         onPressed:
@@ -703,7 +738,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
               content: 'Are you sure you want to delete this log?',
               onConfirm: () async {
                 file.delete();
-                loadPastTrips();
+                loadPastLogs();
               },
             ),
       ),
@@ -721,7 +756,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
                 final directory = file.parent.path;
                 final newPath = '$directory/$newName.txt';
                 await file.rename(newPath);
-                loadPastTrips();
+                loadPastLogs();
               },
             ),
       ),
@@ -790,193 +825,340 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
                   urlTemplate: _mapURLTemplate(isDarkMode),
                   subdomains: ['a', 'b', 'c'],
                 ),
-                MarkerLayer(
-                  markers:
-                      _latitude != 0 && _longitude != 0
-                          ? [
-                            Marker(
-                              width: 24.0,
-                              height: 24.0,
-                              point: LatLng(_latitude, _longitude),
-                              child:
-                                  _speed > 1
-                                      ? Transform.rotate(
-                                        angle: _heading * pi / 180,
-                                        child: Icon(
-                                          Icons.navigation,
-                                          size: 32.0,
-                                          color: Colors.blueAccent[700],
-                                        ),
-                                      )
-                                      : Icon(
-                                        Icons.radio_button_checked,
-                                        size: 32.0,
-                                        color: Colors.blueAccent[700],
-                                      ),
-                            ),
-                          ]
-                          : [],
-                ),
+                ...(_isViewing
+                    ? [
+                      PolylineLayer(
+                        polylines: [
+                          Polyline(
+                            points:
+                                _selectedLog.readAsLinesSync().map((line) {
+                                  final data = line.split(',');
+                                  return LatLng(
+                                    double.parse(data[0]),
+                                    double.parse(data[1]),
+                                  );
+                                }).toList(),
+                            strokeWidth: 4.0,
+                            color: Colors.blue,
+                          ),
+                        ],
+                      ),
+                      MarkerLayer(
+                        markers:
+                            _latitude != 0 && _longitude != 0
+                                ? [
+                                  Marker(
+                                    width: 24.0,
+                                    height: 24.0,
+                                    point:
+                                        _selectedLog
+                                            .readAsLinesSync()
+                                            .map((line) {
+                                              final data = line.split(',');
+                                              return LatLng(
+                                                double.parse(data[0]),
+                                                double.parse(data[1]),
+                                              );
+                                            })
+                                            .toList()
+                                            .first,
+                                    child: Icon(
+                                      Icons.circle,
+                                      size: 16.0,
+                                      color: Colors.green[700],
+                                    ),
+                                  ),
+                                  Marker(
+                                    width: 24.0,
+                                    height: 24.0,
+                                    point:
+                                        _selectedLog
+                                            .readAsLinesSync()
+                                            .map((line) {
+                                              final data = line.split(',');
+                                              return LatLng(
+                                                double.parse(data[0]),
+                                                double.parse(data[1]),
+                                              );
+                                            })
+                                            .toList()
+                                            .last,
+                                    child: Icon(
+                                      Icons.stop_rounded,
+                                      size: 22.0,
+                                      color: Colors.red,
+                                    ),
+                                  ),
+                                ]
+                                : [],
+                      ),
+                    ]
+                    : [
+                      MarkerLayer(
+                        markers:
+                            _latitude != 0 && _longitude != 0
+                                ? [
+                                  Marker(
+                                    width: 24.0,
+                                    height: 24.0,
+                                    point: LatLng(_latitude, _longitude),
+                                    child:
+                                        _speed > 1
+                                            ? Transform.rotate(
+                                              angle: _heading * pi / 180,
+                                              child: Icon(
+                                                Icons.navigation,
+                                                size: 32.0,
+                                                color: Colors.blueAccent[700],
+                                              ),
+                                            )
+                                            : Icon(
+                                              Icons.radio_button_checked,
+                                              size: 32.0,
+                                              color: Colors.blueAccent[700],
+                                            ),
+                                  ),
+                                ]
+                                : [],
+                      ),
+                    ]),
               ],
             ),
           ),
           SafeArea(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16.0, 0, 16.0, 100.0),
+              padding: EdgeInsets.fromLTRB(
+                16.0,
+                0,
+                16.0,
+                _isViewing ? 16.0 : 100.0,
+              ),
               child: Stack(
-                children: [
-                  Positioned(
-                    right: 0,
-                    left: 0,
-                    bottom: 0,
-                    child: Center(
-                      child: ElevatedButton.icon(
-                        onPressed: toggleLogging,
-                        style: ElevatedButton.styleFrom(
-                          padding: EdgeInsets.symmetric(
-                            horizontal: 24.0,
-                            vertical: 12.0,
-                          ),
-                        ),
-                        icon:
-                            _isLogging
-                                ? Icon(Icons.stop)
-                                : Icon(Icons.play_arrow),
-                        label: Text(
-                          _isLogging ? 'Stop' : 'Start',
-                          style: TextStyle(
-                            fontSize: 16.0,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    right: 0,
-                    bottom: 0,
-                    child: Column(
-                      children:
-                          floatingButtonItems.reversed
-                              .map(
-                                (item) => Padding(
-                                  padding: const EdgeInsets.only(top: 16.0),
-                                  child: ElevatedButton.icon(
-                                    onPressed: item.onPressed,
-                                    icon: Icon(item.icon, size: 24.0),
-                                    label: Text(''),
-                                    style: ElevatedButton.styleFrom(
-                                      padding: EdgeInsets.fromLTRB(
-                                        20,
-                                        12,
-                                        12,
-                                        12,
-                                      ),
-                                      shape: CircleBorder(),
-                                    ),
+                children:
+                    _isViewing
+                        ? [
+                          Positioned(
+                            right: 0,
+                            left: 0,
+                            bottom: 0,
+                            child: Center(
+                              child: ElevatedButton.icon(
+                                onPressed: () {
+                                  setState(() {
+                                    _isViewing = false;
+                                    _selectedLog = File('');
+                                  });
+                                },
+                                style: ElevatedButton.styleFrom(
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: 24.0,
+                                    vertical: 12.0,
                                   ),
                                 ),
-                              )
-                              .toList(),
-                    ),
-                  ),
-                ],
+                                icon: Icon(Icons.close),
+                                label: Text(
+                                  'Close Preview',
+                                  style: TextStyle(
+                                    fontSize: 16.0,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ]
+                        : [
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: currentStats.map((stat) {
+                                  return Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    mainAxisAlignment: MainAxisAlignment.start,
+                                    children: [
+                                      Icon(
+                                        stat.icon,
+                                        color: colorScheme.primary,
+                                        size: 24.0,
+                                      ),
+                                      Padding(
+                                        padding: const EdgeInsets.all(12.0),
+                                        child: Text(
+                                          stat.label,
+                                          style: TextStyle(
+                                            fontSize: 16.0,
+                                            color: colorScheme.primary,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                }).toList(),
+                            ),
+                          ),
+                          Positioned(
+                            right: 0,
+                            left: 0,
+                            bottom: 0,
+                            child: Center(
+                              child: ElevatedButton.icon(
+                                onPressed: toggleLogging,
+                                style: ElevatedButton.styleFrom(
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: 24.0,
+                                    vertical: 12.0,
+                                  ),
+                                ),
+                                icon:
+                                    _isLogging
+                                        ? Icon(Icons.stop)
+                                        : Icon(Icons.play_arrow),
+                                label: Text(
+                                  _isLogging ? 'Stop' : 'Start',
+                                  style: TextStyle(
+                                    fontSize: 16.0,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          Positioned(
+                            right: 0,
+                            bottom: 0,
+                            child: Column(
+                              children:
+                                  floatingButtonItems.reversed
+                                      .map(
+                                        (item) => Padding(
+                                          padding: const EdgeInsets.only(
+                                            top: 16.0,
+                                          ),
+                                          child: ElevatedButton.icon(
+                                            onPressed: item.onPressed,
+                                            icon: Icon(item.icon, size: 24.0),
+                                            label: Text(''),
+                                            style: ElevatedButton.styleFrom(
+                                              padding: EdgeInsets.fromLTRB(
+                                                20,
+                                                12,
+                                                12,
+                                                12,
+                                              ),
+                                              shape: CircleBorder(),
+                                            ),
+                                          ),
+                                        ),
+                                      )
+                                      .toList(),
+                            ),
+                          ),
+                        ],
               ),
             ),
           ),
-          DraggableScrollableSheet(
-            initialChildSize: getFractionalSizeInHeight(context, 80),
-            minChildSize: getFractionalSizeInHeight(context, 80),
-            maxChildSize: getFractionalSizeInHeight(context, 600),
-            builder: (BuildContext context, ScrollController scrollController) {
-              return Container(
-                decoration: bottomSheetBoxDecoration,
-                child: ListView.builder(
-                  padding: EdgeInsets.all(4.0),
-                  controller: scrollController,
-                  itemCount: _pastTrips.length + 1,
-                  itemBuilder: (context, index) {
-                    if (index == 0) {
-                      return ListTile(
-                        title: Column(
-                          children: [
-                            Container(
-                              width: 40,
-                              height: 4,
-                              decoration: BoxDecoration(
-                                color: colorScheme.primary.withAlpha(220),
-                                borderRadius: BorderRadius.circular(50),
-                              ),
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.all(8.0),
-                              child: Text(
-                                'Past Logs',
-                                style: TextStyle(
-                                  fontSize: 18,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 0,
-                                  color: colorScheme.primary,
+          _isViewing
+              ? Container()
+              : DraggableScrollableSheet(
+                initialChildSize: getFractionalSizeInHeight(context, 80),
+                minChildSize: getFractionalSizeInHeight(context, 80),
+                maxChildSize: getFractionalSizeInHeight(context, 600),
+                builder: (
+                  BuildContext context,
+                  ScrollController scrollController,
+                ) {
+                  return Container(
+                    decoration: bottomSheetBoxDecoration,
+                    child: ListView.builder(
+                      padding: EdgeInsets.all(4.0),
+                      controller: scrollController,
+                      itemCount: _pastLogs.length + 1,
+                      itemBuilder: (context, index) {
+                        if (index == 0) {
+                          return ListTile(
+                            title: Column(
+                              children: [
+                                Container(
+                                  width: 40,
+                                  height: 4,
+                                  decoration: BoxDecoration(
+                                    color: colorScheme.primary.withAlpha(220),
+                                    borderRadius: BorderRadius.circular(50),
+                                  ),
                                 ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    }
-                    final file = _pastTrips[index - 1];
-                    final name = file.path
-                        .split('/')
-                        .last
-                        .replaceAll('.txt', '');
-                    return buildBottomSheetTile(
-                      LogActionButtonItem(
-                        name: name,
-                        onPressed:
-                            (file) => {
-                              showModalBottomSheet(
-                                context: context,
-                                builder:
-                                    (context) => ConstrainedBox(
-                                      constraints: BoxConstraints(
-                                        maxHeight:
-                                            200, // Set max height in pixels
-                                      ),
-                                      child: Container(
-                                        decoration: bottomSheetBoxDecoration,
-                                        child: ListView.builder(
-                                          padding: EdgeInsets.all(4.0),
-                                          itemCount:
-                                              logActionButtonItems.length,
-                                          itemBuilder: (context, index) {
-                                            final item =
-                                                logActionButtonItems[index];
-                                            return buildBottomSheetTile(
-                                              LogActionButtonItem(
-                                                name: item.name,
-                                                icon: item.icon,
-                                                onPressed:
-                                                    (file) =>
-                                                        item.onPressed(file),
-                                              ),
-                                              file,
-                                              context,
-                                            );
-                                          },
-                                        ),
-                                      ),
+                                Padding(
+                                  padding: const EdgeInsets.all(8.0),
+                                  child: Text(
+                                    'Past Logs',
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 0,
+                                      color: colorScheme.primary,
                                     ),
-                              ),
-                            },
-                      ),
-                      file,
-                      context,
-                    );
-                  },
-                ),
-              );
-            },
-          ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+                        final file = _pastLogs[index - 1];
+                        final name = file.path
+                            .split('/')
+                            .last
+                            .replaceAll('.txt', '');
+                        return buildBottomSheetTile(
+                          LogActionButtonItem(
+                            name: name,
+                            onPressed:
+                                (file) => {
+                                  showModalBottomSheet(
+                                    context: context,
+                                    builder:
+                                        (context) => ConstrainedBox(
+                                          constraints: BoxConstraints(
+                                            maxHeight:
+                                                280, // Set max height in pixels
+                                          ),
+                                          child: Container(
+                                            decoration:
+                                                bottomSheetBoxDecoration,
+                                            child: ListView.builder(
+                                              padding: EdgeInsets.all(4.0),
+                                              itemCount:
+                                                  logActionButtonItems.length,
+                                              itemBuilder: (context, index) {
+                                                final item =
+                                                    logActionButtonItems[index];
+                                                return buildBottomSheetTile(
+                                                  LogActionButtonItem(
+                                                    name: item.name,
+                                                    icon: item.icon,
+                                                    onPressed:
+                                                        (file) => item
+                                                            .onPressed(file),
+                                                  ),
+                                                  file,
+                                                  context,
+                                                );
+                                              },
+                                            ),
+                                          ),
+                                        ),
+                                  ),
+                                },
+                          ),
+                          file,
+                          context,
+                        );
+                      },
+                    ),
+                  );
+                },
+              ),
         ],
       ),
     );
