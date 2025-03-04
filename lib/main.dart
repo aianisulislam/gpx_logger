@@ -362,7 +362,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
   void initState() {
     super.initState();
     loadPastLogs();
-    initializeLoggingAccess();
+    initializeLocationAccess();
     _timer = Timer.periodic(Duration(seconds: 1), (Timer t) => loop());
   }
 
@@ -373,7 +373,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
     super.dispose();
   }
 
-  void initializeLoggingAccess() async {
+  void initializeLocationAccess() async {
     bool isServiceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!isServiceEnabled) {
       await Geolocator.openLocationSettings();
@@ -622,7 +622,7 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
         icon: Icons.terrain_outlined,
         label: '${_altitude.toStringAsFixed(2)} meters',
       ),
-      Stats(icon: Icons.signpost_outlined, label: _terrainModeString),
+      Stats(icon: Icons.map_outlined, label: _terrainModeString),
     ];
     final List<FloatingActionButtonItem> floatingButtonItems = [
       FloatingActionButtonItem(
@@ -651,14 +651,13 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
       LogActionButtonItem(
         name: 'View',
         icon: Icons.remove_red_eye,
-        onPressed:
-            (File file) => {
-              Navigator.of(context).pop(),
-              setState(() {
-                _selectedLog = file;
-                _isViewing = true;
-              }),
-            },
+        onPressed: (File file) {
+          Navigator.of(context).pop();
+          setState(() {
+            _selectedLog = file;
+            _isViewing = true;
+          });
+        },
       ),
       LogActionButtonItem(
         name: 'Delete',
@@ -927,12 +926,6 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
                                             style: TextStyle(
                                               fontSize: 16.0,
                                               color: colorScheme.primary,
-                                              foreground:
-                                                  Paint()
-                                                    ..style =
-                                                        PaintingStyle.stroke
-                                                    ..strokeWidth = 4
-                                                    ..color = Colors.white,
                                             ),
                                           ),
                                         ),
@@ -1055,42 +1048,40 @@ class GPXLoggerHomeState extends State<GPXLoggerHome> {
                         return buildBottomSheetTile(
                           LogActionButtonItem(
                             name: name,
-                            onPressed:
-                                (file) => {
-                                  showModalBottomSheet(
-                                    context: context,
-                                    builder:
-                                        (context) => ConstrainedBox(
-                                          constraints: BoxConstraints(
-                                            maxHeight: 280,
-                                          ),
-                                          child: Container(
-                                            decoration:
-                                                bottomSheetBoxDecoration,
-                                            child: ListView.builder(
-                                              padding: EdgeInsets.all(4.0),
-                                              itemCount:
-                                                  logActionButtonItems.length,
-                                              itemBuilder: (context, index) {
-                                                final item =
-                                                    logActionButtonItems[index];
-                                                return buildBottomSheetTile(
-                                                  LogActionButtonItem(
-                                                    name: item.name,
-                                                    icon: item.icon,
-                                                    onPressed:
-                                                        (file) => item
-                                                            .onPressed(file),
-                                                  ),
-                                                  file,
-                                                  context,
-                                                );
-                                              },
-                                            ),
-                                          ),
+                            onPressed: (file) {
+                              showModalBottomSheet(
+                                context: context,
+                                builder:
+                                    (context) => ConstrainedBox(
+                                      constraints: BoxConstraints(
+                                        maxHeight: 280,
+                                      ),
+                                      child: Container(
+                                        decoration: bottomSheetBoxDecoration,
+                                        child: ListView.builder(
+                                          padding: EdgeInsets.all(4.0),
+                                          itemCount:
+                                              logActionButtonItems.length,
+                                          itemBuilder: (context, index) {
+                                            final item =
+                                                logActionButtonItems[index];
+                                            return buildBottomSheetTile(
+                                              LogActionButtonItem(
+                                                name: item.name,
+                                                icon: item.icon,
+                                                onPressed:
+                                                    (file) =>
+                                                        item.onPressed(file),
+                                              ),
+                                              file,
+                                              context,
+                                            );
+                                          },
                                         ),
-                                  ),
-                                },
+                                      ),
+                                    ),
+                              );
+                            },
                           ),
                           file,
                           context,
